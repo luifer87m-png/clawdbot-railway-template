@@ -1,6 +1,6 @@
 import { Client } from "@notionhq/client";
 
-// Inicializamos el cliente de Notion usando tu token global
+// Inicializamos el cliente leyendo la variable de entorno de Railway de forma segura
 const notion = new Client({
   auth: process.env.NOTION_TOKEN,
 });
@@ -10,9 +10,8 @@ const notion = new Client({
  */
 export async function consultarBaseDatos({ databaseId, filtroProperty, filtroValor }) {
   try {
-    const queryOptions = { database_id: databaseId };
+    const queryOptions = { database_id: databaseId || process.env.NOTION_DATABASE_ID };
 
-    // Si el agente quiere buscar algo específico (ej. un huésped o habitación)
     if (filtroProperty && filtroValor) {
       queryOptions.filter = {
         property: filtroProperty,
@@ -39,7 +38,7 @@ export async function modificarElementoNotion({ pageId, propiedadesActualizadas 
   try {
     const response = await notion.pages.update({
       page_id: pageId,
-      properties: propiedadesActualizadas, // El agente armará dinámicamente los cambios
+      properties: propiedadesActualizadas,
     });
     return `¡Elemento con ID ${pageId} modificado con éxito en Hospitality HQ!`;
   } catch (error) {
@@ -52,8 +51,8 @@ export async function modificarElementoNotion({ pageId, propiedadesActualizadas 
  */
 export async function crearRegistroNotion({ databaseId, propiedades }) {
   try {
-    const response = await notion.pages.create({
-      parent: { database_id: databaseId },
+    const response = await notion.databases.create({
+      parent: { database_id: databaseId || process.env.NOTION_DATABASE_ID },
       properties: propiedades,
     });
     return `Nuevo registro creado con éxito. ID: ${response.id}`;
