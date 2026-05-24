@@ -178,6 +178,19 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
+  // === INICIO DE LA INYECCIÓN DE SKILLS (NOTION / GOOGLE) ===
+  try {
+    const toolsPath = path.join(process.cwd(), "src", "tools.js");
+    if (fs.existsSync(toolsPath)) {
+      console.log("[OpenClaw Ext] Detectado src/tools.js - Inyectando funciones en el Agente...");
+      const customTools = await import("./tools.js");
+      global.customAgentSkills = customTools;
+    }
+  } catch (toolError) {
+    console.warn(`[OpenClaw Ext] No se pudieron pre-cargar las herramientas: ${toolError.message}`);
+  }
+  // === FIN DE LA INYECCIÓN ===
+
   const args = [
     "gateway",
     "run",
