@@ -1379,17 +1379,73 @@ proxy.on("proxyReqWs", (_proxyReq, req) => {
 });
 
 // --- Hospitable message webhook ---
-// Phase 1: receive and log Hospitable events only.
-// This does NOT modify Hospitable, Notion, or OpenClaw.
+// Phase 2: receive and normalize Hospitable message.created events.
+// This does NOT modify Hospitable or Notion.
 app.post("/hooks/hospitable-message", (req, res) => {
   try {
-    console.log("[hospitable-webhook] received");
-    console.log("[hospitable-webhook] headers:", JSON.stringify(req.headers));
-    console.log("[hospitable-webhook] body:", JSON.stringify(req.body, null, 2));
+    const payload = req.body || {};
+
+    // Accept only Hospitable v2 message.created events.
+    if (payload.action !== "message.created") {
+      console.log(
+        `[hospitable-webhook] ignored action=${payload.action || "unknown"}`
+      );
+
+      return res.status(200).json({
+        ok: true,
+        ignored: true,
+      });
+    }
+
+    const data = payload.data || {};
+
+    const message = {
+      event_id: payload.id || null,
+      message_id: data.id || null,
+      reservation_id: data.reservation_id || null,
+      conversation_id: data.conversation_id || null,
+      sender_role: data.sender_role || null,
+      sender_type: data.sender_type || null,
+      source: data.source || null,
+      content_type: data.content_type || null,
+      body: data.body || "",
+      property_id: data.property?.id || null,
+      property_name: data.property?.name || null,
+      platform: data.platform || null,
+      platform_message_id: data.platform_id || null,
+      message_created_at: data.created_at || null,
+      webhook_created_at: payload.created || null,
+    };
+
+    // Basic validation.
+    if (!message.message_id || !message.reservation_id) {
+      console.warn("[hospitable-webhook] invalid message event", {
+        event_id: message.event_id,
+        message_id: message.message_id,
+        reservation_id: message.reservation_id,
+      });
+
+      return res.status(200).json({
+        ok: true,
+        ignored: true,
+        reason: "missing_required_fields",
+      });
+    }
+
+    console.log("[hospitable-webhook] message.created", {
+      message_id: message.message_id,
+      reservation_id: message.reservation_id,
+      conversation_id: message.conversation_id,
+      sender_role: message.sender_role,
+      source: message.source,
+      property_name: message.property_name,
+      created_at: message.message_created_at,
+    });
 
     return res.status(200).json({
       ok: true,
       received: true,
+      message_id: message.message_id,
     });
   } catch (err) {
     console.error("[hospitable-webhook] error:", err);
