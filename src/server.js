@@ -1378,6 +1378,28 @@ proxy.on("proxyReqWs", (_proxyReq, req) => {
   attachGatewayAuthHeader(req);
 });
 
+// --- Hospitable message webhook ---
+// Phase 1: receive and log Hospitable events only.
+// This does NOT modify Hospitable, Notion, or OpenClaw.
+app.post("/hooks/hospitable-message", (req, res) => {
+  try {
+    console.log("[hospitable-webhook] received");
+    console.log("[hospitable-webhook] headers:", JSON.stringify(req.headers));
+    console.log("[hospitable-webhook] body:", JSON.stringify(req.body, null, 2));
+
+    return res.status(200).json({
+      ok: true,
+      received: true,
+    });
+  } catch (err) {
+    console.error("[hospitable-webhook] error:", err);
+
+    return res.status(500).json({
+      ok: false,
+    });
+  }
+});
+
 app.use(requireDashboardAuth, async (req, res) => {
   // If not configured, force users to /setup for any non-setup routes.
   if (!isConfigured() && !req.path.startsWith("/setup")) {
