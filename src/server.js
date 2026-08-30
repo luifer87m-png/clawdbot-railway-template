@@ -1418,19 +1418,32 @@ app.post("/hooks/hospitable-message", (req, res) => {
     };
 
     // Basic validation.
-    if (!message.message_id || !message.reservation_id) {
-      console.warn("[hospitable-webhook] invalid message event", {
-        event_id: message.event_id,
-        message_id: message.message_id,
-        reservation_id: message.reservation_id,
-      });
+    if (!message.message_id) {
+  console.warn("[hospitable-webhook] ignored event without message_id", {
+    event_id: message.event_id,
+  });
 
-      return res.status(200).json({
-        ok: true,
-        ignored: true,
-        reason: "missing_required_fields",
-      });
-    }
+  return res.status(200).json({
+    ok: true,
+    ignored: true,
+    reason: "missing_message_id",
+  });
+}
+
+if (!message.reservation_id) {
+  console.log("[hospitable-webhook] ignored message without reservation", {
+    event_id: message.event_id,
+    message_id: message.message_id,
+    sender_role: message.sender_role,
+    source: message.source,
+  });
+
+  return res.status(200).json({
+    ok: true,
+    ignored: true,
+    reason: "no_reservation",
+  });
+}
 
     console.log("[hospitable-webhook] message.created", {
       message_id: message.message_id,
