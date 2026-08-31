@@ -1378,9 +1378,135 @@ proxy.on("proxyReqWs", (_proxyReq, req) => {
   attachGatewayAuthHeader(req);
 });
 
+// --- Hospitable -> OpenClaw dry-run sync ---
+// For now this only asks the agent to inspect Hospitable + Notion.
+// It MUST NOT write anything.
+async function runHospitableDryRunSync(message) {
+  const syncEnabled =
+    String(process.env.HOSPITABLE_SYNC_ENABLED || "").toLowerCase() === "true";
+
+  if (!syncEnabled) {
+    console.log("[hospitable-sync] disabled", {
+      message_id: message.message_id,
+      reservation_id: message.reservation_id,
+    });
+    return;
+  }
+
+  const prompt = `
+AUTOMATIC HOSPITABLE SYNC - READ ONLY TEST
+
+This request was triggered automatically by a Hospitable message.created webhook.
+
+Trusted webhook data:
+reservation_id: ${message.reservation_id}
+message_id: ${message.message_id}
+conversation_id: ${message.conversation_id || "unknown"}
+webhook sender_role: ${message.sender_role || "unknown"}
+property from webhook: ${message.property_name || "unknown"}
+message timestamp: ${message.message_created_at || "unknown"}
+
+Use Hospitable MCP and the Notion skill.
+
+STEP 1 - HOSPITABLE
+
+Use reservation_id as the trusted starting identifier.
+
+Find the reservation and obtain:
+- confirmation/reservation code
+- guest name
+- property
+- complete conversation
+- total messages
+
+Determine Guest/Host from Hospitable conversation data.
+Do not rely only on webhook sender_role because it may be null.
+
+STEP 2 - NOTION
+
+Find the exact record in "Master Reservation Tracker" where "Conf #" exactly
+matches the confirmation/reservation code obtained from Hospitable.
+
+Verify:
+- Guest Name matches the Hospitable guest
+- Listing Name matches the Hospitable property
+
+Read the current "Conversation" field.
+
+STEP 3 - COMPARE
+
+Determine:
+- total Hospitable messages
+- messages already represented in Notion
+- missing messages
+- duplicate messages in Notion
+
+IMPORTANT:
+- READ ONLY.
+- DO NOT modify Notion.
+- DO NOT modify Hospitable.
+- DO NOT send messages.
+- DO NOT change any field.
+- Use reservation_id -> Hospitable confirmation code -> exact Notion Conf #.
+- If anything is ambiguous, mark Safe to sync = No.
+
+Return a compact result containing:
+Conf #
+Guest
+Property
+Hospitable messages
+Messages already in Notion
+Missing messages
+Duplicate messages in Notion
+Guest match
+Property match
+Safe to sync
+Reason if not safe
+`.trim();
+
+  console.log("[hospitable-sync] starting dry-run", {
+    message_id: message.message_id,
+    reservation_id: message.reservation_id,
+  });
+
+  try {
+    const result = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "agent",
+        "--agent",
+        "main",
+        "--message",
+        prompt,
+      ]),
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: STATE_DIR,
+          OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+        },
+        timeoutMs: 5 * 60 * 1000,
+      }
+    );
+
+    console.log("[hospitable-sync] dry-run complete", {
+      message_id: message.message_id,
+      reservation_id: message.reservation_id,
+    });
+
+    console.log("[hospitable-sync] result:", String(result));
+  } catch (err) {
+    console.error("[hospitable-sync] dry-run failed", {
+      message_id: message.message_id,
+      reservation_id: message.reservation_id,
+      error: String(err),
+    });
+  }
+}
+
+
 // --- Hospitable message webhook ---
-// Phase 2: receive and normalize Hospitable message.created events.
-// This does NOT modify Hospitable or Notion.
+// Receive and normalize Hospitable message.created events.
 app.post("/hooks/hospitable-message", (req, res) => {
   try {
     const payload = req.body || {};
@@ -1417,33 +1543,38 @@ app.post("/hooks/hospitable-message", (req, res) => {
       webhook_created_at: payload.created || null,
     };
 
-    // Basic validation.
     if (!message.message_id) {
-  console.warn("[hospitable-webhook] ignored event without message_id", {
-    event_id: message.event_id,
-  });
+      console.warn(
+        "[hospitable-webhook] ignored event without message_id",
+        {
+          event_id: message.event_id,
+        }
+      );
 
-  return res.status(200).json({
-    ok: true,
-    ignored: true,
-    reason: "missing_message_id",
-  });
-}
+      return res.status(200).json({
+        ok: true,
+        ignored: true,
+        reason: "missing_message_id",
+      });
+    }
 
-if (!message.reservation_id) {
-  console.log("[hospitable-webhook] ignored message without reservation", {
-    event_id: message.event_id,
-    message_id: message.message_id,
-    sender_role: message.sender_role,
-    source: message.source,
-  });
+    if (!message.reservation_id) {
+      console.log(
+        "[hospitable-webhook] ignored message without reservation",
+        {
+          event_id: message.event_id,
+          message_id: message.message_id,
+          sender_role: message.sender_role,
+          source: message.source,
+        }
+      );
 
-  return res.status(200).json({
-    ok: true,
-    ignored: true,
-    reason: "no_reservation",
-  });
-}
+      return res.status(200).json({
+        ok: true,
+        ignored: true,
+        reason: "no_reservation",
+      });
+    }
 
     console.log("[hospitable-webhook] message.created", {
       message_id: message.message_id,
@@ -1453,6 +1584,13 @@ if (!message.reservation_id) {
       source: message.source,
       property_name: message.property_name,
       created_at: message.message_created_at,
+    });
+
+    runHospitableDryRunSync(message).catch((err) => {
+      console.error(
+        "[hospitable-sync] unexpected error:",
+        String(err)
+      );
     });
 
     return res.status(200).json({
