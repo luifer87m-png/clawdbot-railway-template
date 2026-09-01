@@ -1427,18 +1427,23 @@ function formatHospitableMessage(message) {
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .trim();
-} {
-    const types = message.attachments
-      .map((attachment) => attachment?.type || "Attachment")
-      .map(
-        (type) =>
-          String(type).charAt(0).toUpperCase() +
-          String(type).slice(1)
-      )
-      .join(", ");
+} else if (
+  Array.isArray(message.attachments) &&
+  message.attachments.length
+) {
+  const types = message.attachments
+    .map((attachment) => attachment?.type || "Attachment")
+    .map(
+      (type) =>
+        String(type).charAt(0).toUpperCase() +
+        String(type).slice(1)
+    )
+    .join(", ");
 
-    content = `[${types}]`;
-  } else {
+  content = `[${types}]`;
+} else {
+  content = "[No text]";
+} {
     content = "[No text]";
   }
 
