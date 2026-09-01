@@ -1444,7 +1444,19 @@ function formatHospitableMessage(message) {
 } else {
   content = "[No text]";
   }
-  return `${sender}: ${content}`;
+  const timestamp = message.created_at
+  ? new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(new Date(message.created_at))
+  : "Unknown time";
+  
+  return `[${timestamp}] ${sender}: ${content}`;
 }
 
 function splitNotionRichText(text, maxLength = 1900) {
