@@ -1378,20 +1378,331 @@ proxy.on("proxyReqWs", (_proxyReq, req) => {
   attachGatewayAuthHeader(req);
 });
 
-// --- Hospitable -> OpenClaw dry-run sync ---
-// For now this only asks the agent to inspect Hospitable + Notion.
-// It MUST NOT write anything.
-async function runHospitableDryRunSync(message) {
+// --- Hospitable -> Notion direct sync ---
+// Deterministic sync. No GPT / OpenClaw agent is used here.
+
+const NOTION_DATABASE_ID = "2ffbc8c3-357a-8033-8a50-cee288f1e284";
+
+function notionPlainText(prop) {
+  if (!prop) return "";
+
+  if (prop.type === "title") {
+    return (prop.title || [])
+      .map((x) => x.plain_text || "")
+      .join("");
+  }
+
+  if (prop.type === "rich_text") {
+    return (prop.rich_text || [])
+      .map((x) => x.plain_text || "")
+      .join("");
+  }
+
+  if (prop.type === "select") {
+    return prop.select?.name || "";
+  }
+
+  return "";
+}
+
+function normalizeSyncValue(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function formatHospitableMessage(message) {
+  const sender =
+    message.sender_type === "guest"
+      ? "Guest"
+      : message.sender_type === "host"
+      ? "Host"
+      : "Unknown";
+
+  let content = "";
+
+  if (message.body && String(message.body).trim()) {
+    content = String(message.body).trim();
+  } else if (
+    Array.isArray(message.attachments) &&
+    message.attachments.length
+  ) {
+    const types = message.attachments
+      .map((attachment) => attachment?.type || "Attachment")
+      .map(
+        (type) =>
+          String(type).charAt(0).toUpperCase() +
+          String(type).slice(1)
+      )
+      .join(", ");
+
+    content = `[${types}]`;
+  } else {
+    content = "[No text]";
+  }
+
+  return `${sender}: ${content}`;
+}
+
+function splitNotionRichText(text, maxLength = 1900) {
+  const chunks = [];
+
+  for (let i = 0; i < text.length; i += maxLength) {
+    chunks.push(text.slice(i, i + maxLength));
+  }
+
+  return chunks.map((chunk) => ({
+    type: "text",
+    text: {
+      content: chunk,
+    },
+  }));
+}
+
+async function hospitableApiGet(pathname) {
+  const token = process.env.HOSPITABLE_API_TOKEN;
+
+  if (!token) {
+    throw new Error("HOSPITABLE_API_TOKEN is not configured");
+  }
+
+  const response = await fetch(
+    `https://public.api.hospitable.com/v2${pathname}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Hospitable API ${response.status}: ${await response.text()}`
+    );
+  }
+
+  return response.json();
+}
+
+async function queryNotionReservation(confirmationCode) {
+  const token = process.env.NOTION_API_TOKEN;
+
+  if (!token) {
+    throw new Error("NOTION_API_TOKEN is not configured");
+  }
+
+  const response = await fetch(
+    `https://api.notion.com/v1/databases/${NOTION_DATABASE_ID}/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        filter: {
+          property: "Conf #",
+          title: {
+            equals: confirmationCode,
+          },
+        },
+        page_size: 10,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Notion query ${response.status}: ${await response.text()}`
+    );
+  }
+
+  return response.json();
+}
+
+async function updateNotionConversation(pageId, conversation) {
+  const token = process.env.NOTION_API_TOKEN;
+
+  const response = await fetch(
+    `https://api.notion.com/v1/pages/${pageId}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        properties: {
+          Conversation: {
+            rich_text: splitNotionRichText(conversation),
+          },
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Notion PATCH ${response.status}: ${await response.text()}`
+    );
+  }
+
+  return response.json();
+}
+
+async function runHospitableDirectSync(message) {
   const syncEnabled =
-    String(process.env.HOSPITABLE_SYNC_ENABLED || "").toLowerCase() === "true";
+    String(
+      process.env.HOSPITABLE_DIRECT_SYNC_ENABLED || ""
+    ).toLowerCase() === "true";
 
   if (!syncEnabled) {
-    console.log("[hospitable-sync] disabled", {
+    console.log("[hospitable-direct-sync] disabled", {
       message_id: message.message_id,
       reservation_id: message.reservation_id,
     });
+
     return;
   }
+
+  console.log("[hospitable-direct-sync] starting", {
+    message_id: message.message_id,
+    reservation_id: message.reservation_id,
+  });
+
+  try {
+    // 1. Get reservation
+    const reservationResponse = await hospitableApiGet(
+      `/reservations/${message.reservation_id}`
+    );
+
+    const reservation = reservationResponse.data;
+
+    if (!reservation?.code) {
+      throw new Error(
+        `Reservation ${message.reservation_id} has no confirmation code`
+      );
+    }
+
+    // 2. Get complete conversation
+    const messagesResponse = await hospitableApiGet(
+      `/reservations/${message.reservation_id}/messages`
+    );
+
+    const messages = [...(messagesResponse.data || [])]
+      .filter(
+        (item) =>
+          item &&
+          item.id &&
+          item.created_at
+      )
+      .sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() -
+          new Date(b.created_at).getTime()
+      );
+
+    const conversation = messages
+      .map(formatHospitableMessage)
+      .join("\n\n");
+
+    // 3. Find exact Notion reservation
+    const notionData = await queryNotionReservation(
+      reservation.code
+    );
+
+    const matches = notionData.results || [];
+
+    if (matches.length !== 1) {
+      throw new Error(
+        `Expected exactly 1 Notion row for ${reservation.code}; found ${matches.length}`
+      );
+    }
+
+    const page = matches[0];
+
+    const notionConf = notionPlainText(
+      page.properties?.["Conf #"]
+    );
+
+    const notionListing = notionPlainText(
+      page.properties?.["Listing Name"]
+    );
+
+    const notionPlatform = notionPlainText(
+      page.properties?.["Platform"]
+    );
+
+    const existingConversation = notionPlainText(
+      page.properties?.["Conversation"]
+    );
+
+    // 4. Safety checks
+    if (
+      normalizeSyncValue(notionConf) !==
+      normalizeSyncValue(reservation.code)
+    ) {
+      throw new Error("Confirmation code mismatch");
+    }
+
+    if (
+      normalizeSyncValue(notionPlatform) !==
+      normalizeSyncValue(reservation.platform)
+    ) {
+      throw new Error(
+        `Platform mismatch: Hospitable=${reservation.platform}, Notion=${notionPlatform}`
+      );
+    }
+
+    // Webhook already gives us the property name, so use it as
+    // an additional safety check when available.
+    if (
+      message.property_name &&
+      notionListing &&
+      normalizeSyncValue(notionListing) !==
+        normalizeSyncValue(message.property_name)
+    ) {
+      throw new Error(
+        `Listing mismatch: webhook=${message.property_name}, Notion=${notionListing}`
+      );
+    }
+
+    // 5. Idempotency
+    if (existingConversation === conversation) {
+      console.log("[hospitable-direct-sync] already current", {
+        reservation_id: message.reservation_id,
+        confirmation_code: reservation.code,
+        messages: messages.length,
+      });
+
+      return;
+    }
+
+    // 6. Update ONLY Conversation
+    await updateNotionConversation(
+      page.id,
+      conversation
+    );
+
+    console.log("[hospitable-direct-sync] updated", {
+      reservation_id: message.reservation_id,
+      confirmation_code: reservation.code,
+      messages: messages.length,
+      conversation_length: conversation.length,
+      notion_page_id: page.id,
+    });
+  } catch (err) {
+    console.error("[hospitable-direct-sync] failed", {
+      message_id: message.message_id,
+      reservation_id: message.reservation_id,
+      error: String(err),
+    });
+  }
+}
 
   const prompt = `
 AUTOMATIC HOSPITABLE SYNC - READ ONLY TEST
@@ -1586,12 +1897,12 @@ app.post("/hooks/hospitable-message", (req, res) => {
       created_at: message.message_created_at,
     });
 
-    runHospitableDryRunSync(message).catch((err) => {
-      console.error(
-        "[hospitable-sync] unexpected error:",
-        String(err)
-      );
-    });
+   runHospitableDirectSync(message).catch((err) => {
+  console.error(
+    "[hospitable-direct-sync] unexpected error:",
+    String(err)
+  );
+});
 
     return res.status(200).json({
       ok: true,
