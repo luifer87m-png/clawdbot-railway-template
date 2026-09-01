@@ -1423,11 +1423,11 @@ function formatHospitableMessage(message) {
   let content = "";
 
   if (message.body && String(message.body).trim()) {
-    content = String(message.body).trim();
-  } else if (
-    Array.isArray(message.attachments) &&
-    message.attachments.length
-  ) {
+  content = String(message.body)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+} {
     const types = message.attachments
       .map((attachment) => attachment?.type || "Attachment")
       .map(
@@ -1608,7 +1608,9 @@ async function runHospitableDirectSync(message) {
 
     const conversation = messages
       .map(formatHospitableMessage)
-      .join("\n\n");
+      .join("\n\n")
+      .replace(/\r\n/g, "\n")
+  .replace(/\r/g, "\n");
 
     // 3. Find exact Notion reservation
     const notionData = await queryNotionReservation(
