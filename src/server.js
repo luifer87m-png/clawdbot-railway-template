@@ -1443,10 +1443,7 @@ function formatHospitableMessage(message) {
   content = `[${types}]`;
 } else {
   content = "[No text]";
-} {
-    content = "[No text]";
   }
-
   return `${sender}: ${content}`;
 }
 
