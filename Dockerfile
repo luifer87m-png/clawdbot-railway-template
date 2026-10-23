@@ -33,7 +33,8 @@ RUN set -eux; \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
   done
 
-RUN pnpm install --no-frozen-lockfile --reporter=append-only
+RUN pnpm install --no-frozen-lockfile --reporter=ndjson > /tmp/pnpm-install.log 2>&1 \
+    || { code=$?; tail -n 120 /tmp/pnpm-install.log; exit "$code"; }
 RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:install && pnpm ui:build
